@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import httpx
 from config import config
 from typing import Optional, Dict, Any
@@ -6,8 +6,9 @@ from typing import Optional, Dict, Any
 class KayzenClient:
     def __init__(self):
         self.base_url = config.base_url
-        self.api_key = config.api_key
-        self.api_secret = config.api_secret
+        self.user_name = config.user_name
+        self.password = config.password
+        self.basic_auth_token = config.basic_auth_token
         self.auth_token: Optional[str] = None
         self.token_expiry: Optional[datetime] = None
 
@@ -16,20 +17,45 @@ class KayzenClient:
         if self.auth_token and self.token_expiry and datetime.now() < self.token_expiry:
             return self.auth_token
 
+        url = "https://api.kayzen.io/v1/authentication/token"
+        payload = {
+            "grant_type": "password",
+            "username": self.user_name,
+            "password": self.password
+        }
+        headers = {
+            "accept": "application/json",
+            "content-type": "application/json",
+            "authorization": f"Basic {self.basic_auth_token}"
+        }
+
+        print("Requesting token with:")
+        print(f"URL: {url}")
+        print(f"Headers: {headers}")
+        print(f"Payload: {payload}")
+
         async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{self.base_url}/auth/token",
-                json={
-                    "api_key": self.api_key,
-                    "api_secret": self.api_secret
-                }
-            )
-            response.raise_for_status()
-            data = response.json()
-            self.auth_token = data["token"]
-            # Token expires in 24 hours, but we'll refresh after 23 hours
-            self.token_expiry = datetime.now().replace(hour=23)
-            return self.auth_token
+            try:
+                response = await client.post(url, json=payload, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+                print(f"Response data: {data}")
+
+                # Check if access_token exists in response
+                if "access_token" in data:
+                    self.auth_token = data["access_token"]
+                else:
+                    print(f"Unexpected response format: {data}")
+                    raise ValueError("No access_token in response")
+
+                # Token expires in 30 minutes, we'll refresh after 25 minutes
+                self.token_expiry = datetime.now() + timedelta(minutes=25)
+                return self.auth_token
+            except httpx.HTTPError as e:
+                print(f"HTTP Error: {str(e)}")
+                print(f"Response status: {e.response.status_code if hasattr(e, 'response') else 'N/A'}")
+                print(f"Response body: {await e.response.text() if hasattr(e, 'response') else 'N/A'}")
+                raise
 
     async def _make_request(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
         """Make authenticated request to Kayzen API"""
